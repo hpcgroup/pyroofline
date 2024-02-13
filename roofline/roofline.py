@@ -16,15 +16,17 @@ XMAX = 1000
 
 
 class Roofline:
-    def __init__(self, path=None, data=None):
+    def __init__(self, path=None, data=None, data_format=None):
         self.path = path
         self.data = data
+        self.data_format = data_format
+        
 
     @staticmethod
     def from_ncu(path):
         if path is None or not path.endswith(".csv"):
             raise ValueError("ncu data should be in CSV format.")
-        return Roofline(path, pd.read_csv(path))
+        return Roofline(path, pd.read_csv(path), data_format="ncu")
 
     @staticmethod
     def from_omniperf(path):
@@ -37,19 +39,25 @@ class Roofline:
             if pmc_perf in csv_files and roofline in csv_files:
                 pmc_perf_data = pd.read_csv(pmc_perf)
                 roofline_data = pd.read_csv(roofline)
-                return Roofline(path, [pmc_perf_data, roofline_data])
+                return Roofline(path, [pmc_perf_data, roofline_data], data_format="omniperf")
             else:
                 raise ValueError(
                     "The directory should contain pmc_perf.csv and roofline.csv."
                 )
 
-    def analyze_ncu(self, data):
+    def analyze(self):
+        if self.data_format == "ncu":
+            return self.analyze_ncu()
+        elif self.data_format == "omniperf":
+            return self.analyze_omniperf()
+
+    def analyze_ncu(self):
         """
         This function calculates all the required points to create a roofline plot.
         Specifically, it calculates double, single, half precisions and tensor core.
         It also calculates DRAM, L1, and L2 ceilings and achieved values.
         """
-        dataframe = data.copy(deep=True)
+        dataframe = self.data.copy(deep=True)
         dataframe = dataframe[self.data["Kernel Name"].notna()]
 
         def _calculate_l1(peakwork, achieved_performance, precision):
@@ -379,7 +387,8 @@ class Roofline:
             dataframe = dataframe.groupby("Kernel Name", as_index=False).agg(np.mean)
 
         columns = list(dataframe.filter(regex="single_dram|double_dram").columns)
-        points = []
+        points_achieved = []
+        points_peak = []
         max_values = {}
         for precision in precisions:
             achieved_performance = "{}_achieved_performance".format(precision)
@@ -392,51 +401,15 @@ class Roofline:
                 dataframe[starting_point] = (
                     dataframe[peak_performance] / dataframe[roof_type]
                 ) * start_AI
-                points.append([achieved_performance, achieved_type])
-                points.append([peak_performance, roof_type])
+                points_achieved.append([achieved_performance, achieved_type])
+                points_peak.append([peak_performance, roof_type])
 
-        for point in points:
-            print(dataframe[point].iloc[2])
+        # for point in points:
+        #     dataframe[point].iloc[2]
+        return (points_peak, points_achieved)
 
-    def analyze_omniperf(self, data):
-        def calculate_application_performance(pmc_perf_dataframe):
-            try:
-                pmc_perf_dataframe["total_flops"] = (
-                    64
-                    * (
-                        pmc_perf_dataframe["SQ_INSTS_VALU_ADD_F16"]
-                        + pmc_perf_dataframe["SQ_INSTS_VALU_MUL_F16"]
-                        + (2 * pmc_perf_dataframe["SQ_INSTS_VALU_FMA_F16"])
-                        + pmc_perf_dataframe["SQ_INSTS_VALU_TRANS_F16"]
-                    )
-                    + (
-                        64
-                        * (
-                            pmc_perf_dataframe["SQ_INSTS_VALU_ADD_F32"]
-                            + pmc_perf_dataframe["SQ_INSTS_VALU_MUL_F32"]
-                            + (2 * pmc_perf_dataframe["SQ_INSTS_VALU_FMA_F32"])
-                            + pmc_perf_dataframe["SQ_INSTS_VALU_TRANS_F32"]
-                        )
-                    )
-                    + (
-                        64
-                        * (
-                            pmc_perf_dataframe["SQ_INSTS_VALU_ADD_F64"]
-                            + pmc_perf_dataframe["SQ_INSTS_VALU_MUL_F64"]
-                            + (2 * pmc_perf_dataframe["SQ_INSTS_VALU_FMA_F64"])
-                            + pmc_perf_dataframe["SQ_INSTS_VALU_TRANS_F64"]
-                        )
-                    )
-                    + (pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_F16"] * 512)
-                    + (pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_BF16"] * 512)
-                    + (pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_F32"] * 512)
-                    + (pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_F64"] * 512)
-                )
-            except KeyError:
-                # if verbose >= 3:
-                # print("{}: Skipped total_flops at index {}".format(kernelName[:35], idx))
-                pass
-
+    def analyze_omniperf(self):
+        def _calculate_metrics(pmc_perf_dataframe):
             try:
                 pmc_perf_dataframe["valu_flops"] = (
                     64
@@ -462,8 +435,6 @@ class Roofline:
                     )
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped valu_flops at index {}".format(kernelName[:35], idx))
                 pass
 
             try:
@@ -471,41 +442,44 @@ class Roofline:
                     pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_F16"] * 512
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped mfma ops at index {}".format(kernelName[:35], idx))
                 pass
+
             try:
                 pmc_perf_dataframe["mfma_flops_bf16"] = (
                     pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_BF16"] * 512
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped mfma ops at index {}".format(kernelName[:35], idx))
                 pass
+
             try:
                 pmc_perf_dataframe["mfma_flops_f32"] = (
                     pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_F32"] * 512
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped mfma ops at index {}".format(kernelName[:35], idx))
                 pass
+
             try:
                 pmc_perf_dataframe["mfma_flops_f64"] = (
                     pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_F64"] * 512
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped mfma ops at index {}".format(kernelName[:35], idx))
                 pass
+
             try:
                 if "SQ_INSTS_VALU_MFMA_MOPS_I8" in pmc_perf_dataframe.columns:
                     pmc_perf_dataframe["mfma_iops_i8"] = (
                         pmc_perf_dataframe["SQ_INSTS_VALU_MFMA_MOPS_I8"] * 512
                     )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped mfma ops at index {}".format(kernelName[:35], idx))
+                pass
+
+            try:
+                pmc_perf_dataframe["total_flops"] = pmc_perf_dataframe["valu_flops"] 
+                + pmc_perf_dataframe["mfma_flops_f16"] 
+                + pmc_perf_dataframe["mfma_flops_bf16"] 
+                + pmc_perf_dataframe["mfma_flops_f32"] 
+                + pmc_perf_dataframe["mfma_flops_f64"]
+            except KeyError:
                 pass
 
             try:
@@ -518,15 +492,11 @@ class Roofline:
                     * L2_BANKS
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped lds_data at index {}".format(kernelName[:35], idx))
                 pass
 
             try:
                 L1cache_data = pmc_perf_dataframe["TCP_TOTAL_CACHE_ACCESSES_sum"] * 64
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped L1cache_data at index {}".format(kernelName[:35], idx))
                 pass
 
             try:
@@ -537,8 +507,6 @@ class Roofline:
                     + pmc_perf_dataframe["TCP_TCC_READ_REQ_sum"] * 64
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped L2cache_data at index {}".format(kernelName[:35], idx))
                 pass
 
             try:
@@ -561,8 +529,6 @@ class Roofline:
                     )
                 )
             except KeyError:
-                # if verbose >= 3:
-                #     print("{}: Skipped hbm_data at index {}".format(kernelName[:35], idx))
                 pass
 
             duration = pmc_perf_dataframe["EndNs"] - pmc_perf_dataframe["BeginNs"]
@@ -574,9 +540,11 @@ class Roofline:
                 pmc_perf_dataframe["total_flops"] / L2cache_data
             )
             pmc_perf_dataframe["ai_hbm"] = pmc_perf_dataframe["total_flops"] / hbm_data
-            pmc_perf_dataframe["ai_hbm"] = pmc_perf_dataframe["total_flops"] / duration
 
-        def calculate_roof(pmc_perf_dataframe, roofline_dataframe):
+            pmc_perf_dataframe["ai_lds"] = pmc_perf_dataframe["total_flops"] / lds_data
+
+        # TODO: Draft
+        def _calculate_roof(pmc_perf_dataframe, roofline_dataframe):
             cache_hierarchy = ["HBM", "L2", "L1", "LDS"]
 
             roofline_dataframe = roofline_dataframe.drop(
@@ -585,7 +553,7 @@ class Roofline:
             roofline_dataframe = roofline_dataframe.drop(
                 columns=roofline_dataframe.filter(like="Low").columns
             )
-            # print(roofline_dataframe)
+           
             peakOps = list(roofline_dataframe.filter(like="Flops").columns)
             peakOps.append("MFMAI8Ops")
             peakBw = roofline_dataframe.filter(like="Bw").columns
@@ -608,8 +576,10 @@ class Roofline:
             # if x2_mfma < x0_mfma:
             #     x0_mfma = x2_mfma
 
-        pmc_perf_dataframe = data[0].copy(deep=True)
-        roofline_dataframe = data[1].copy(deep=True)
+        pmc_perf_dataframe = self.data[0].copy(deep=True)
+        roofline_dataframe = self.data[1].copy(deep=True)
 
-        calculate_application_performance(pmc_perf_dataframe)
-        calculate_roof(pmc_perf_dataframe, roofline_dataframe)
+        _calculate_metrics(pmc_perf_dataframe)
+        _calculate_roof(pmc_perf_dataframe, roofline_dataframe)
+
+        return pmc_perf_dataframe

@@ -368,46 +368,6 @@ class Roofline:
 
         return dataframe
 
-    # TODO: Draft
-    def plot_ncu(
-        self,
-        dataframe,
-        precisions=["single", "double"],
-        types=["dram"],
-        kernels=None,
-        summary=False,
-    ):
-        """
-        precision: list of precisions: single, double, half, tensor
-        list of hardware options: dram, l1, l2
-        """
-        start_AI = 0.001
-
-        if summary:
-            dataframe = dataframe.groupby("Kernel Name", as_index=False).agg(np.mean)
-
-        columns = list(dataframe.filter(regex="single_dram|double_dram").columns)
-        points_achieved = []
-        points_peak = []
-        max_values = {}
-        for precision in precisions:
-            achieved_performance = "{}_achieved_performance".format(precision)
-            peak_performance = "{}_peak_performance".format(precision)
-            max_values[peak_performance] = dataframe[peak_performance].max()
-            for type in types:
-                achieved_type = "{}_{}_achieved_AI".format(precision, type)
-                roof_type = "{}_{}_roof_AI".format(precision, type)
-                starting_point = "{}_{}_start_performance".format(precision, type)
-                dataframe[starting_point] = (
-                    dataframe[peak_performance] / dataframe[roof_type]
-                ) * start_AI
-                points_achieved.append([achieved_performance, achieved_type])
-                points_peak.append([peak_performance, roof_type])
-
-        # for point in points:
-        #     dataframe[point].iloc[2]
-        return (points_peak, points_achieved)
-
     def analyze_omniperf(self):
         def _calculate_metrics(pmc_perf_dataframe):
             try:
@@ -583,3 +543,131 @@ class Roofline:
         _calculate_roof(pmc_perf_dataframe, roofline_dataframe)
 
         return pmc_perf_dataframe
+
+    # TODO: Draft
+    def plot_ncu(
+        self,
+        dataframe,
+        precisions=["single", "double"],
+        types=["dram"],
+        kernels=None,
+        summary=False,
+    ):
+        """
+        precision: list of precisions: single, double, half, tensor
+        list of hardware options: dram, l1, l2
+        """
+        start_AI = 0.001
+
+        if summary:
+            dataframe = dataframe.groupby("Kernel Name", as_index=False).agg(np.mean)
+
+        columns = list(dataframe.filter(regex="single_dram|double_dram").columns)
+        points_achieved = []
+        points_peak = []
+        max_values = {}
+        for precision in precisions:
+            achieved_performance = "{}_achieved_performance".format(precision)
+            peak_performance = "{}_peak_performance".format(precision)
+            max_values[peak_performance] = dataframe[peak_performance].max()
+            for type in types:
+                achieved_type = "{}_{}_achieved_AI".format(precision, type)
+                roof_type = "{}_{}_roof_AI".format(precision, type)
+                starting_point = "{}_{}_start_performance".format(precision, type)
+                dataframe[starting_point] = (
+                    dataframe[peak_performance] / dataframe[roof_type]
+                ) * start_AI
+                points_achieved.append([achieved_performance, achieved_type])
+                points_peak.append([peak_performance, roof_type])
+
+        # for point in points:
+        #     dataframe[point].iloc[2]
+        return (points_peak, points_achieved)
+
+
+    # Just an example.
+    # We need to update this function and use real roofline values. 
+    def plot_roofline(self):
+        from bokeh.models import CustomJS, CheckboxGroup, Button, LegendItem, HoverTool, ColumnDataSource
+        from bokeh.layouts import column
+        from bokeh.plotting import figure, show, output_notebook
+
+        # callback for checkboxGroups to toggle line and dot visibility and update legends
+        def _create_visibility_callback(renderers, legend_items):
+            code = """
+                for (var i = 0; i < renderers.length; i++) {
+                    renderers[i].visible = cb_obj.active.includes(i);
+                    // Update legend item visibility
+                    legend_items[i].visible = cb_obj.active.includes(i);  
+                }
+            """
+            return CustomJS(args=dict(renderers=renderers, legend_items=legend_items), code=code)
+
+        output_notebook()
+
+        # Data for the kernels and ceilings
+        # Example: x: [[x1, x2, x3], [y1, y2, y3]]. This will create a single line.
+        line_data = {'x': [[0, 10, 30], [0, 5, 30], [0, 15, 30]], 'y': [[0, 10, 10], [0, 5, 5], [0, 15, 15]]}
+        # Example: x: [[x1]], y: [[y1]]. This will create a single dot.
+        dot_data = {'x': [[5], [6], [12]], 'y': [[3], [2], [8]]}
+
+        line_labels = ["DRAM", "L2", "L1"]
+        dot_labels = ["Kernel 1", "Kernel 2", "Kernel 3"]
+
+        p = figure(title="Interactive Kernels and Ceilings", x_axis_label='X', y_axis_label='Y')
+
+        # Add lines and dots with legends to the plot
+        line_renderers = []
+        dot_renderers = []
+
+        for i, (lx, ly) in enumerate(zip(line_data['x'], line_data['y'])):
+            line_source = ColumnDataSource(data=dict(x=lx, y=ly, name=[line_labels[i]]*len(lx)))
+            line = p.line('x', 'y', source=line_source, line_width=2, color="blue", legend_label=line_labels[i], visible=True)
+            line_renderers.append(line)
+
+        for i, (dx, dy) in enumerate(zip(dot_data['x'], dot_data['y'])):
+            dot_source = ColumnDataSource(data=dict(x=dx, y=dy, name=[dot_labels[i]]))
+            dot = p.circle('x', 'y', source=dot_source, size=10, color="red", legend_label=dot_labels[i], visible=True)    
+            dot_renderers.append(dot)
+
+
+        # add HoverTool to display name and fixed values for lines and dots
+        hover_for_lines = HoverTool(tooltips=[("Name", "@name"), ("(x, y)", "($x, $y)")], renderers=line_renderers)
+        hover_for_dots = HoverTool(tooltips=[("Name", "@name"), ("(x, y)", "(@x, @y)")], renderers=dot_renderers)
+
+        p.add_tools(hover_for_lines, hover_for_dots)
+
+        # create legend items for lines and dots to be controlled separately
+        line_legend_items = [LegendItem(label=label, renderers=[renderer]) for label, renderer in zip(line_labels, line_renderers)]
+        dot_legend_items = [LegendItem(label=label, renderers=[renderer]) for label, renderer in zip(dot_labels, dot_renderers)]
+
+        # clear the default legend and add our custom legend items
+        p.legend.items.clear()
+        p.legend.items.extend(line_legend_items + dot_legend_items)
+
+        # create checkboxGroup widgets for lines and dots
+        checkbox_group_lines = CheckboxGroup(labels=line_labels, active=[0, 1, 2], inline=False)
+        checkbox_group_dots = CheckboxGroup(labels=dot_labels, active=[0, 1, 2], inline=False)
+
+        # attach callbacks to CheckboxGroups for controlling visibility and legends
+        checkbox_group_lines.js_on_change('active', _create_visibility_callback(line_renderers, line_legend_items))
+        checkbox_group_dots.js_on_change('active', _create_visibility_callback(dot_renderers, dot_legend_items))
+
+        # create buttons for the CheckboxGroups
+        toggle_lines_button = Button(label="Ceilings", button_type="primary")
+        toggle_dots_button = Button(label="Kernels", button_type="primary")
+
+        # click on buttons for the visibility of the CheckboxGroups
+        toggle_lines_button.js_on_click(CustomJS(args=dict(checkbox_group=checkbox_group_lines), code="""
+            checkbox_group.visible = !checkbox_group.visible;
+        """))
+        toggle_dots_button.js_on_click(CustomJS(args=dict(checkbox_group=checkbox_group_dots), code="""
+            checkbox_group.visible = !checkbox_group.visible;
+        """))
+
+        # layout with buttons, CheckboxGroups, and plot
+        layout = column(toggle_lines_button, checkbox_group_lines, toggle_dots_button, checkbox_group_dots, p)
+
+        # Display the layout in the notebook
+        show(layout)
+
